@@ -7,6 +7,22 @@ open System.Collections.ObjectModel
 open System.ComponentModel
 open System.Windows
 open Elmish.WPF
+open System.Reflection
+
+type CustomPropertyDescriptor(name : string, componentType : Type, propertyType : Type, getValue, isReadOnly, setValue) =
+  inherit PropertyDescriptor(name, [||])
+
+  override __.ComponentType = componentType
+  override __.PropertyType  = propertyType
+  override __.IsReadOnly    = isReadOnly
+
+  override __.CanResetValue(x) = false
+  override __.ResetValue(x : obj) = failwithf "ResetValue shouldn't get invoked (parameter: %A)" x
+
+  override __.GetValue(x : obj) = getValue x
+  override __.SetValue(x, v) = setValue x v
+
+  override __.ShouldSerializeValue(x) = true
 
 /// Represents all necessary data used in an active binding.
 type Binding<'model, 'msg> =
@@ -40,12 +56,12 @@ type Binding<'model, 'msg> =
       * getBindings: (unit -> BindingSpec<obj, obj> list)
       * toMsg: (obj -> 'msg)
   | SubModelSeq of
-      vms: ObservableCollection<ViewModel<obj, obj>>
+      //vms: ObservableCollection<ViewModel<obj, obj>> Can't specify the item type here
+      vms: ObservableCollection<obj>
       * getModels: ('model -> obj seq)
       * getId: (obj -> obj)
       * getBindings: (unit -> BindingSpec<obj, obj> list)
       * toMsg: (obj * obj -> 'msg)
-
 
 and [<AllowNullLiteral>] ViewModel<'model, 'msg>
       ( initialModel: 'model,
@@ -53,14 +69,13 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
         bindingSpecs: BindingSpec<'model, 'msg> list,
         config: ElmConfig)
       as this =
-  inherit DynamicObject()
+  inherit CustomTypeDescriptor()
 
   let log fmt =
     let innerLog (str: string) =
       if config.LogConsole then Console.WriteLine(str)
       if config.LogTrace then Diagnostics.Trace.WriteLine(str)
     Printf.kprintf innerLog fmt
-
 
   let mutable currentModel = initialModel
 
@@ -125,7 +140,7 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
           |> Seq.map (fun m ->
                ViewModel(m, (fun msg -> toMsg (getId m, msg) |> dispatch), getBindings (), config)
           )
-          |> ObservableCollection
+          |> (fun xs -> ObservableCollection(xs |> Seq.cast<obj>))
         SubModelSeq (vms, getModels, getId, getBindings, toMsg)
 
   let setInitialError name = function
@@ -208,14 +223,15 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
         | Some vm, Some m ->
             vm.UpdateModel(m)
             false
-    | SubModelSeq (vms, getModels, getId, getBindings, toMsg) ->
+    | SubModelSeq (vmObjs, getModels, getId, getBindings, toMsg) ->
         let newSubModels = getModels newModel
         // Prune and update existing models
         let newLookup = Dictionary<_,_>()
         for m in newSubModels do newLookup.Add(getId m, m)
-        for vm in vms |> Seq.toList do
+        let vms = vmObjs |> Seq.cast<ViewModel<obj, obj>> |> Seq.toList
+        for vm in vms do
           match newLookup.TryGetValue (getId vm.CurrentModel) with
-          | false, _ -> vms.Remove(vm) |> ignore
+          | false, _ -> vmObjs.Remove(vm) |> ignore
           | true, newSubModel -> vm.UpdateModel newSubModel
         // Add new models that don't currently exist
         let modelsToAdd =
@@ -224,7 +240,7 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
                 vms |> Seq.exists (fun vm -> getId m = getId vm.CurrentModel) |> not
           )
         for m in modelsToAdd do
-          vms.Add <| ViewModel(m, (fun msg -> toMsg (getId m, msg) |> dispatch), getBindings (), config)
+          vmObjs.Add <| ViewModel(m, (fun msg -> toMsg (getId m, msg) |> dispatch), getBindings (), config)
         // Reorder according to new model list
         for newIdx, newSubModel in newSubModels |> Seq.indexed do
           let oldIdx =
@@ -232,7 +248,7 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
             |> Seq.indexed
             |> Seq.find (fun (_, vm) -> getId newSubModel = getId vm.CurrentModel)
             |> fst
-          if oldIdx <> newIdx then vms.Move(oldIdx, newIdx)
+          if oldIdx <> newIdx then vmObjs.Move(oldIdx, newIdx)
         false
 
   /// Returns the command associated with a command binding if the command's
@@ -265,6 +281,48 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
         | Error err -> setError err name
     | _ -> ()
 
+  let properties = PropertyDescriptorCollection([||])
+  
+  do
+    for b in bindings do
+
+      let name = b.Key
+
+      let getValue (x : obj) =
+        match x with
+        | :? ViewModel<'model, 'msg> as x -> x.TryGetMember name |> Option.toObj
+        | _ -> null
+
+      let setValue (x : obj) (value : obj) =
+        match x with
+        | :? ViewModel<'model, 'msg> as x -> x.TrySetMember (name, value) |> ignore
+        | _ -> ()
+
+      let isReadOnly =
+        match b.Value with
+        | OneWay          _ -> true
+
+        | TwoWay         (_, _)   
+        | TwoWayValidate (_, _, _)
+        | TwoWayIfValid  (_, _)    -> false
+
+        | OneWayLazy (_, _, _, _)
+        | OneWaySeq  (_, _, _, _, _, _)
+
+        | Cmd        (_, _)
+        | CmdIfValid (_, _)
+        | ParamCmd    _
+
+        | SubModel    (_, _, _, _)
+        | SubModelSeq (_, _, _, _, _) -> true
+
+      let propertyType =
+        match getValue this with
+        | null -> typeof<obj> // BH: this could cause problems. Maybe need a way to optionally provide this explicitly?
+        | x    -> x.GetType()
+
+      properties.Add(CustomPropertyDescriptor(name, this.GetType(), propertyType, getValue, isReadOnly, setValue)) |> ignore
+
   member __.CurrentModel : 'model = currentModel
 
   member __.UpdateModel (newModel: 'model) : unit =
@@ -284,37 +342,36 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
     for Kvp (name, binding) in bindings do
       updateValidationStatus name binding
 
-  override __.TryGetMember (binder, result) =
-    log "[VM] TryGetMember %s" binder.Name
-    match bindings.TryGetValue binder.Name with
+  member __.TryGetMember memberName =
+    log "[VM] TryGetMember %s" memberName
+    match bindings.TryGetValue memberName with
     | false, _ ->
-        log "[VM] TryGetMember FAILED: Property %s doesn't exist" binder.Name
-        false
+        log "[VM] TryGetMember FAILED: Property %s doesn't exist" memberName
+        None
     | true, binding ->
-        result <-
-          match binding with
-          | OneWay get
-          | TwoWay (get, _)
-          | TwoWayValidate (get, _, _)
-          | TwoWayIfValid (get, _) ->
-              get currentModel
-          | OneWayLazy (value, _, _, _) ->
-              (!value).Value
-          | OneWaySeq (vals, _, _, _, _, _) ->
-              box vals
-          | Cmd (cmd, _)
-          | CmdIfValid (cmd, _)
-          | ParamCmd cmd ->
-              box cmd
-          | SubModel (vm, _, _, _) -> !vm |> Option.toObj |> box
-          | SubModelSeq (vms, _, _, _, _) -> box vms
-        true
+        match binding with
+        | OneWay get
+        | TwoWay (get, _)
+        | TwoWayValidate (get, _, _)
+        | TwoWayIfValid (get, _) ->
+            get currentModel
+        | OneWayLazy (value, _, _, _) ->
+            (!value).Value
+        | OneWaySeq (vals, _, _, _, _, _) ->
+            box vals
+        | Cmd (cmd, _)
+        | CmdIfValid (cmd, _)
+        | ParamCmd cmd ->
+            box cmd
+        | SubModel (vm, _, _, _) -> !vm |> Option.toObj |> box
+        | SubModelSeq (vms, _, _, _, _) -> box vms
+        |> Some
 
-  override __.TrySetMember (binder, value) =
-    log "[VM] TrySetMember %s" binder.Name
-    match bindings.TryGetValue binder.Name with
+  member __.TrySetMember (memberName, value) =
+    log "[VM] TrySetMember %s" memberName
+    match bindings.TryGetValue memberName with
     | false, _ ->
-        log "[VM] TrySetMember FAILED: Property %s doesn't exist" binder.Name
+        log "[VM] TrySetMember FAILED: Property %s doesn't exist" memberName
         false
     | true, binding ->
         match binding with
@@ -325,9 +382,9 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
         | TwoWayIfValid (_, set) ->
             match set value currentModel with
             | Ok msg ->
-                removeError binder.Name
+                removeError memberName
                 dispatch msg
-            | Error err -> setError err binder.Name
+            | Error err -> setError err memberName
             true
         | OneWay _
         | OneWayLazy _
@@ -337,8 +394,10 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
         | ParamCmd _
         | SubModel _
         | SubModelSeq _ ->
-            log "[VM] TrySetMember FAILED: Binding %s is read-only" binder.Name
+            log "[VM] TrySetMember FAILED: Binding %s is read-only" memberName
             false
+
+  override __.GetProperties () = properties
 
   interface INotifyPropertyChanged with
     [<CLIEvent>]
@@ -354,3 +413,4 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
       match errors.TryGetValue propName with
       | true, err -> upcast [err]
       | false, _ -> upcast []
+
