@@ -26,26 +26,33 @@ type CustomPropertyDescriptor(name : string, componentType : Type, propertyType 
 
 /// Represents all necessary data used in an active binding.
 type Binding<'model, 'msg> =
-  | OneWay of get: ('model -> obj)
+  | OneWay of propertyType: Type * get: ('model -> obj)
   | OneWayLazy of
-      currentVal: Lazy<obj> ref
+      propertyType: Type
+      * currentVal: Lazy<obj> ref
       * get: ('model -> obj)
       * map: (obj -> obj)
       * equals: (obj -> obj -> bool)
   | OneWaySeq of
-      vals: ObservableCollection<obj>
+      itemType: Type
+      * vals: ObservableCollection<obj>
       * get: ('model -> obj)
       * map: (obj -> obj seq)
       * equals: (obj -> obj -> bool)
       * getId: (obj -> obj)
       * itemEquals: (obj -> obj -> bool)
-  | TwoWay of get: ('model -> obj) * set: (obj -> 'model -> 'msg)
+  | TwoWay of
+      propertyType: Type
+      * get: ('model -> obj)
+      * set: (obj -> 'model -> 'msg)
   | TwoWayValidate of
-      get: ('model -> obj)
+      propertyType: Type
+      * get: ('model -> obj)
       * set: (obj -> 'model -> 'msg)
       * validate: ('model -> Result<obj, string>)
   | TwoWayIfValid of
-      get: ('model -> obj)
+      propertyType: Type
+      * get: ('model -> obj)
       * set: (obj -> 'model -> Result<'msg, string>)
   | Cmd of cmd: Command * canExec: ('model -> bool)
   | CmdIfValid of cmd: Command * exec: ('model -> Result<'msg, obj>)
@@ -107,15 +114,15 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
 
   let initializeBinding bindingSpec =
     match bindingSpec with
-    | OneWaySpec get -> OneWay get
-    | OneWayLazySpec (get, map, equals) ->
-        OneWayLazy (ref <| lazy (initialModel |> get |> map), get, map, equals)
-    | OneWaySeqLazySpec (get, map, equals, getId, itemEquals) ->
+    | OneWaySpec (t, get) -> OneWay (t, get)
+    | OneWayLazySpec (t, get, map, equals) ->
+        OneWayLazy (t, ref <| lazy (initialModel |> get |> map), get, map, equals)
+    | OneWaySeqLazySpec (t, get, map, equals, getId, itemEquals) ->
         let vals = ObservableCollection(initialModel |> get |> map)
-        OneWaySeq (vals, get, map, equals, getId, itemEquals)
-    | TwoWaySpec (get, set) -> TwoWay (get, set)
-    | TwoWayValidateSpec (get, set, validate) -> TwoWayValidate (get, set, validate)
-    | TwoWayIfValidSpec (get, set) -> TwoWayIfValid (get, set)
+        OneWaySeq (t, vals, get, map, equals, getId, itemEquals)
+    | TwoWaySpec (t, get, set) -> TwoWay (t, get, set)
+    | TwoWayValidateSpec (t, get, set, validate) -> TwoWayValidate (t, get, set, validate)
+    | TwoWayIfValidSpec (t, get, set) -> TwoWayIfValid (t, get, set)
     | CmdSpec (exec, canExec) ->
         let execute _ = exec currentModel |> dispatch
         let canExecute _ = canExec currentModel
@@ -144,11 +151,11 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
         SubModelSeq (vms, getModels, getId, getBindings, toMsg)
 
   let setInitialError name = function
-    | TwoWayValidate (_, _, validate) ->
+    | TwoWayValidate (_, _, _, validate) ->
         match validate initialModel with
         | Ok _ -> ()
         | Error error -> setError error name
-    | TwoWayIfValid (get, set) ->
+    | TwoWayIfValid (_, get, set) ->
         let initialValue = get initialModel
         match set initialValue initialModel with
         | Ok _ -> ()
@@ -168,17 +175,17 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
   /// indicating whether to trigger PropertyChanged for this binding
   let updateValue newModel binding =
     match binding with
-    | OneWay get
-    | TwoWay (get, _)
-    | TwoWayValidate (get, _, _)
-    | TwoWayIfValid (get, _) ->
+    | OneWay (_, get)
+    | TwoWay (_, get, _)
+    | TwoWayValidate (_, get, _, _)
+    | TwoWayIfValid (_, get, _) ->
         get currentModel <> get newModel
-    | OneWayLazy (currentVal, get, map, equals) ->
+    | OneWayLazy (_, currentVal, get, map, equals) ->
         if equals (get newModel) (get currentModel) then false
         else
           currentVal := lazy (newModel |> get |> map)
           true
-    | OneWaySeq (vals, get', map, equals', getId, itemEquals) ->
+    | OneWaySeq (_, vals, get', map, equals', getId, itemEquals) ->
         if not <| equals' (get' newModel) (get' currentModel) then
           let newVals = newModel |> get' |> map
           // Prune and update existing values
@@ -275,7 +282,7 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
   /// Updates the validation status for a binding.
   let updateValidationStatus name binding =
     match binding with
-    | TwoWayValidate (_, _, validate) ->
+    | TwoWayValidate (_, _, _, validate) ->
         match validate currentModel with
         | Ok _ -> removeError name
         | Error err -> setError err name
@@ -302,12 +309,12 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
         match b.Value with
         | OneWay          _ -> true
 
-        | TwoWay         (_, _)   
-        | TwoWayValidate (_, _, _)
-        | TwoWayIfValid  (_, _)    -> false
+        | TwoWay         (_, _, _)   
+        | TwoWayValidate (_, _, _, _)
+        | TwoWayIfValid  (_, _, _)    -> false
 
-        | OneWayLazy (_, _, _, _)
-        | OneWaySeq  (_, _, _, _, _, _)
+        | OneWayLazy (_, _, _, _, _)
+        | OneWaySeq  (_, _, _, _, _, _, _)
 
         | Cmd        (_, _)
         | CmdIfValid (_, _)
@@ -317,9 +324,19 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
         | SubModelSeq (_, _, _, _, _) -> true
 
       let propertyType =
-        match getValue this with
-        | null -> typeof<obj> // BH: this could cause problems. Maybe need a way to optionally provide this explicitly?
-        | x    -> x.GetType()
+        match b.Value with
+        | OneWay     (t, _)
+        | OneWayLazy (t, _, _, _, _)
+        | OneWayLazy (t, _, _, _, _)
+        | OneWaySeq  (t, _, _, _, _, _, _)
+        | TwoWay         (t, _, _)   
+        | TwoWayValidate (t, _, _, _)
+        | TwoWayIfValid  (t, _, _) -> t
+        | Cmd        (_, _)
+        | CmdIfValid (_, _)
+        | ParamCmd    _ -> typeof<Command>
+        | SubModel    (_, _, _, _) -> typeof<ViewModel<obj, obj>>
+        | SubModelSeq (_, _, _, _, _) -> typeof<ObservableCollection<ViewModel<obj, obj>>>
 
       properties.Add(CustomPropertyDescriptor(name, this.GetType(), propertyType, getValue, isReadOnly, setValue)) |> ignore
 
@@ -350,14 +367,14 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
         None
     | true, binding ->
         match binding with
-        | OneWay get
-        | TwoWay (get, _)
-        | TwoWayValidate (get, _, _)
-        | TwoWayIfValid (get, _) ->
+        | OneWay (_, get)
+        | TwoWay (_, get, _)
+        | TwoWayValidate (_, get, _, _)
+        | TwoWayIfValid (_, get, _) ->
             get currentModel
-        | OneWayLazy (value, _, _, _) ->
+        | OneWayLazy (_, value, _, _, _) ->
             (!value).Value
-        | OneWaySeq (vals, _, _, _, _, _) ->
+        | OneWaySeq (_, vals, _, _, _, _, _) ->
             box vals
         | Cmd (cmd, _)
         | CmdIfValid (cmd, _)
@@ -375,11 +392,11 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
         false
     | true, binding ->
         match binding with
-        | TwoWay (_, set)
-        | TwoWayValidate (_, set, _) ->
+        | TwoWay (_, _, set)
+        | TwoWayValidate (_, _, set, _) ->
             dispatch <| set value currentModel
             true
-        | TwoWayIfValid (_, set) ->
+        | TwoWayIfValid (_, _, set) ->
             match set value currentModel with
             | Ok msg ->
                 removeError memberName
@@ -413,4 +430,3 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
       match errors.TryGetValue propName with
       | true, err -> upcast [err]
       | false, _ -> upcast []
-

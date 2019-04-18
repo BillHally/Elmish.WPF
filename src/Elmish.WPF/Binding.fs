@@ -9,7 +9,7 @@ module Binding =
   /// <param name="name">The binding name.</param>
   let oneWay (get: 'model -> 'a) (name: string) =
     { Name = name
-      Data = OneWaySpec (get >> box) }
+      Data = OneWaySpec (typeof<'a>, (get >> box)) }
 
   /// <summary>
   ///   Creates a one-way binding to an optional value. The getter automatically
@@ -20,7 +20,8 @@ module Binding =
   /// <param name="set">Returns the message to dispatch.</param>
   /// <param name="name">The binding name.</param>
   let oneWayOpt (get: 'model -> 'a option) (name: string) =
-    oneWay (get >> Option.map box >> Option.toObj) name
+    { Name = name
+      Data = OneWaySpec (typeof<'a>, (get >> Option.map box >> Option.toObj)) }
 
   /// <summary>
   ///   Creates a lazily evaluated one-way binding. The map function will be
@@ -42,6 +43,7 @@ module Binding =
     { Name = name
       Data =
         OneWayLazySpec (
+          typeof<'a>,
           get >> box,
           unbox >> map >> box,
           fun a b -> equals (unbox a) (unbox b))
@@ -72,6 +74,7 @@ module Binding =
     { Name = name
       Data =
         OneWaySeqLazySpec (
+          typeof<'a>,
           id >> box,
           unbox >> get >> Seq.map box,
           (fun _ _ -> false),
@@ -115,6 +118,7 @@ module Binding =
     { Name = name
       Data =
         OneWaySeqLazySpec (
+          typeof<'a>,
           get >> box,
           unbox >> map >> Seq.map box,
           boxedEquals,
@@ -128,7 +132,7 @@ module Binding =
   /// <param name="name">The binding name.</param>
   let twoWay (get: 'model -> 'a) (set: 'a -> 'model -> 'msg) (name: string) =
     { Name = name
-      Data = TwoWaySpec (get >> box, unbox >> set) }
+      Data = TwoWaySpec (typeof<'a>, get >> box, unbox >> set) }
 
   /// <summary>
   ///   Creates a two-way binding to an optional value. The getter/setter
@@ -162,7 +166,7 @@ module Binding =
       (validate: 'model -> Result<'ignored, string>)
       (name: string) =
     { Name = name
-      Data = TwoWayValidateSpec (get >> box, unbox >> set, validate >> Result.map box) }
+      Data = TwoWayValidateSpec (typeof<'a>, get >> box, unbox >> set, validate >> Result.map box) }
 
   /// <summary>
   ///   Creates a two-way binding that uses a validating setter to set validation
@@ -179,7 +183,7 @@ module Binding =
       (set: 'a -> 'model -> Result<'msg, string>)
       (name: string) =
     { Name = name
-      Data = TwoWayIfValidSpec (get >> box, unbox >> set) }
+      Data = TwoWayIfValidSpec (typeof<'a>, get >> box, unbox >> set) }
 
   /// <summary>Creates a command binding that depends only on the model.</summary>
   /// <param name="exec">Returns the message to dispatch.</param>

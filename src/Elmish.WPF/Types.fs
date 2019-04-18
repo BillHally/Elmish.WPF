@@ -6,24 +6,31 @@ open System.Windows.Input
 
 /// Represents all necessary data used to create the different binding types.
 type BindingSpecData<'model, 'msg> =
-  | OneWaySpec of get: ('model -> obj)
+  | OneWaySpec of propertyType : Type * get: ('model -> obj)
   | OneWayLazySpec of
-      get: ('model -> obj)
+      propertyType: Type
+      * get: ('model -> obj)
       * map: (obj -> obj)
       * equals: (obj -> obj -> bool)
   | OneWaySeqLazySpec of
-      get: ('model -> obj)
+      itemType : Type
+      * get: ('model -> obj)
       * map: (obj -> obj seq)
       * equals: (obj -> obj -> bool)
       * getId: (obj -> obj)
       * itemEquals: (obj -> obj -> bool)
-  | TwoWaySpec of get: ('model -> obj) * set: (obj -> 'model -> 'msg)
+  | TwoWaySpec of
+      propertyType: Type
+      * get: ('model -> obj)
+      * set: (obj -> 'model -> 'msg)
   | TwoWayValidateSpec of
-      get: ('model -> obj)
+      propertyType: Type
+      * get: ('model -> obj)
       * set: (obj -> 'model -> 'msg)
       * validate: ('model -> Result<obj, string>)
   | TwoWayIfValidSpec of
-      get: ('model -> obj)
+      propertyType: Type
+      * get: ('model -> obj)
       * set: (obj -> 'model -> Result<'msg, string>)
   | CmdSpec of
       exec: ('model -> 'msg)
@@ -52,18 +59,18 @@ and BindingSpec<'model, 'msg> =
 module BindingSpecData =
 
   let box : BindingSpecData<'model, 'msg> -> BindingSpecData<obj, obj> = function
-  | OneWaySpec get -> OneWaySpec (unbox >> get)
-  | OneWayLazySpec (get, map, equals) -> OneWayLazySpec (unbox >> get, map, equals)
-  | OneWaySeqLazySpec (get, map, equals, getId, elementEquals) ->
-      OneWaySeqLazySpec (unbox >> get, map, equals, getId, elementEquals)
-  | TwoWaySpec (get, set) ->
-      TwoWaySpec (unbox >> get, (fun v m -> set v (unbox m) |> box))
-  | TwoWayValidateSpec (get, set, validate) ->
+  | OneWaySpec (t, get) -> OneWaySpec (t, (unbox >> get))
+  | OneWayLazySpec (t, get, map, equals) -> OneWayLazySpec (t, unbox >> get, map, equals)
+  | OneWaySeqLazySpec (t, get, map, equals, getId, elementEquals) ->
+      OneWaySeqLazySpec (t, unbox >> get, map, equals, getId, elementEquals)
+  | TwoWaySpec (t, get, set) ->
+      TwoWaySpec (t, unbox >> get, (fun v m -> set v (unbox m) |> box))
+  | TwoWayValidateSpec (t, get, set, validate) ->
       let boxedSet v m = set v (unbox m) |> box
-      TwoWayValidateSpec (unbox >> get, boxedSet, unbox >> validate)
-  | TwoWayIfValidSpec (get, set) ->
+      TwoWayValidateSpec (t, unbox >> get, boxedSet, unbox >> validate)
+  | TwoWayIfValidSpec (t, get, set) ->
       let boxedSet v m = set v (unbox m) |> Result.map box
-      TwoWayIfValidSpec (unbox >> get, boxedSet)
+      TwoWayIfValidSpec (t, unbox >> get, boxedSet)
   | CmdSpec (exec, canExec) -> CmdSpec (unbox >> exec >> box, unbox >> canExec)
   | CmdIfValidSpec exec -> CmdIfValidSpec (unbox >> exec >> Result.map box)
   | ParamCmdSpec (exec, canExec, autoRequery) ->
