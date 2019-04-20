@@ -449,12 +449,6 @@ and ViewModel private () =
         let getMethod = typeBuilder.DefineMethod("get_" + propertyName, getSetAttr, propertyType, Type.EmptyTypes)
         let getPropertyIL = getMethod.GetILGenerator()
 
-        ////
-        // Write the getter's name to the console
-        getPropertyIL.Emit(OpCodes.Ldstr, getMethod.Name)
-        getPropertyIL.Emit(OpCodes.Call, writeLineInGetter)
-        ////
-
         getPropertyIL.Emit(OpCodes.Ldarg_0) // instance
         getPropertyIL.Emit(OpCodes.Ldstr, propertyName)
         getPropertyIL.Emit(OpCodes.Call, tryGetMember.MakeGenericMethod propertyType)
@@ -466,21 +460,10 @@ and ViewModel private () =
         let setMethod = typeBuilder.DefineMethod("set_" + propertyName, getSetAttr, typeof<Void>, [| propertyType |])
         let setPropertyIL = setMethod.GetILGenerator()
 
-        ////
-        // Write the setter's name and argument to the console
-        setPropertyIL.Emit(OpCodes.Ldstr, sprintf "%s <{0}>" setMethod.Name)
-        setPropertyIL.Emit(OpCodes.Ldarg_1) // value
-        if propertyType.IsValueType then setPropertyIL.Emit(OpCodes.Box, propertyType)
-        setPropertyIL.Emit(OpCodes.Call, writeLineInSetter)
-        ////
-
-        ////
-        // Invoke TrySetMember
         setPropertyIL.Emit(OpCodes.Ldarg_0) // instance
         setPropertyIL.Emit(OpCodes.Ldstr, propertyName)
         setPropertyIL.Emit(OpCodes.Ldarg_1) // value
         setPropertyIL.Emit(OpCodes.Call, trySetMember.MakeGenericMethod propertyType)
-        ////
 
         setPropertyIL.Emit(OpCodes.Ret)
         propertyBuilder.SetSetMethod(setMethod)
