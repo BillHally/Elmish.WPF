@@ -63,7 +63,7 @@ type Binding<'model, 'msg> =
       * getBindings: (unit -> BindingSpec<obj, obj> list)
       * toMsg: (obj -> 'msg)
   | SubModelSeq of
-      vms: ObservableCollection<ViewModel<obj, obj>>
+      vms: ObservableCollection<obj> //<ViewModel<obj, obj>>
       * getModels: ('model -> obj seq)
       * getId: (obj -> obj)
       * getBindings: (unit -> BindingSpec<obj, obj> list)
@@ -116,7 +116,7 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
     | OneWayLazySpec (t, get, map, equals) ->
         OneWayLazy (t, ref <| lazy (initialModel |> get |> map), get, map, equals)
     | OneWaySeqLazySpec (t, get, map, equals, getId, itemEquals) ->
-        let vals = ObservableCollection(initialModel |> get |> map)
+        let vals = ObservableCollection<obj>(initialModel |> get |> map)
         OneWaySeq (t, vals, get, map, equals, getId, itemEquals)
     | TwoWaySpec (t, get, set) -> TwoWay (t, get, set)
     | TwoWayValidateSpec (t, get, set, validate) -> TwoWayValidate (t, get, set, validate)
@@ -144,6 +144,7 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
           getModels initialModel
           |> Seq.map (fun m ->
                ViewModel.Create(m, (fun msg -> toMsg (getId m, msg) |> dispatch), getBindings (), config)
+               :> obj
           )
           |> ObservableCollection
         SubModelSeq (vms, getModels, getId, getBindings, toMsg)
@@ -233,7 +234,7 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
         // Prune and update existing models
         let newLookup = Dictionary<_,_>()
         for m in newSubModels do newLookup.Add(getId m, m)
-        for vm in vms |> Seq.toList do
+        for vm in vms |> Seq.cast<ViewModel<obj, obj>> |> Seq.toList do
           match newLookup.TryGetValue (getId vm.CurrentModel) with
           | false, _ -> vms.Remove(vm) |> ignore
           | true, newSubModel -> vm.UpdateModel newSubModel
@@ -241,7 +242,7 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
         let modelsToAdd =
           newSubModels
           |> Seq.filter (fun m ->
-                vms |> Seq.exists (fun vm -> getId m = getId vm.CurrentModel) |> not
+                vms |> Seq.cast<ViewModel<obj, obj>> |> Seq.exists (fun vm -> getId m = getId vm.CurrentModel) |> not
           )
         for m in modelsToAdd do
           vms.Add <| ViewModel.Create(m, (fun msg -> toMsg (getId m, msg) |> dispatch), getBindings (), config)
@@ -249,6 +250,7 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
         for newIdx, newSubModel in newSubModels |> Seq.indexed do
           let oldIdx =
             vms
+            |> Seq.cast<ViewModel<obj, obj>> 
             |> Seq.indexed
             |> Seq.find (fun (_, vm) -> getId newSubModel = getId vm.CurrentModel)
             |> fst
@@ -396,7 +398,7 @@ and ViewModel private () =
           | CmdIfValidSpec (_)
           | ParamCmdSpec    _ -> typeof<Command>
           | SubModelSpec    (_, _, _) -> typeof<ViewModel<obj, obj>>
-          | SubModelSeqSpec (_, _, _, _) -> typeof<ObservableCollection<ViewModel<obj, obj>>>
+          | SubModelSeqSpec (_, _, _, _) -> typeof<ObservableCollection<obj>> //ViewModel<obj, obj>>>
 
         yield name, propertyType
       }
