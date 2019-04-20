@@ -4,6 +4,7 @@ NUGET
     Elmish (3.0.0-beta-7)
       FSharp.Core (>= 4.6.2)
     FSharp.Core (4.6.2) - redirects: force
+    Sigil (4.7)
 
 GROUP Build
 NUGET

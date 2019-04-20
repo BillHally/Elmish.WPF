@@ -1,13 +1,13 @@
 namespace Elmish.WPF.Internal
 
 open System
-open System.Dynamic
 open System.Collections.Generic
 open System.Collections.ObjectModel
 open System.ComponentModel
 open System.Windows
 open Elmish.WPF
 open System.Reflection
+open System.Reflection.Emit
 
 type CustomPropertyDescriptor(name : string, componentType : Type, propertyType : Type, getValue, isReadOnly, setValue) =
   inherit PropertyDescriptor(name, [||])
@@ -63,8 +63,7 @@ type Binding<'model, 'msg> =
       * getBindings: (unit -> BindingSpec<obj, obj> list)
       * toMsg: (obj -> 'msg)
   | SubModelSeq of
-      //vms: ObservableCollection<ViewModel<obj, obj>> Can't specify the item type here
-      vms: ObservableCollection<obj>
+      vms: ObservableCollection<ViewModel<obj, obj>>
       * getModels: ('model -> obj seq)
       * getId: (obj -> obj)
       * getBindings: (unit -> BindingSpec<obj, obj> list)
@@ -76,7 +75,6 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
         bindingSpecs: BindingSpec<'model, 'msg> list,
         config: ElmConfig)
       as this =
-  inherit CustomTypeDescriptor()
 
   let log fmt =
     let innerLog (str: string) =
@@ -139,15 +137,15 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
         match getModel initialModel with
         | None -> SubModel (ref None, getModel, getBindings, toMsg)
         | Some m ->
-            let vm = ViewModel(m, toMsg >> dispatch, getBindings (), config)
+            let vm = ViewModel.Create(m, toMsg >> dispatch, getBindings (), config)
             SubModel (ref <| Some vm, getModel, getBindings, toMsg)
     | SubModelSeqSpec (getModels, getId, getBindings, toMsg) ->
         let vms =
           getModels initialModel
           |> Seq.map (fun m ->
-               ViewModel(m, (fun msg -> toMsg (getId m, msg) |> dispatch), getBindings (), config)
+               ViewModel.Create(m, (fun msg -> toMsg (getId m, msg) |> dispatch), getBindings (), config)
           )
-          |> (fun xs -> ObservableCollection(xs |> Seq.cast<obj>))
+          |> ObservableCollection
         SubModelSeq (vms, getModels, getId, getBindings, toMsg)
 
   let setInitialError name = function
@@ -225,20 +223,19 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
             vm := None
             true
         | None, Some m ->
-            vm := Some <| ViewModel(m, toMsg >> dispatch, getBindings (), config)
+            vm := Some <| ViewModel.Create(m, toMsg >> dispatch, getBindings (), config)
             true
         | Some vm, Some m ->
             vm.UpdateModel(m)
             false
-    | SubModelSeq (vmObjs, getModels, getId, getBindings, toMsg) ->
+    | SubModelSeq (vms, getModels, getId, getBindings, toMsg) ->
         let newSubModels = getModels newModel
         // Prune and update existing models
         let newLookup = Dictionary<_,_>()
         for m in newSubModels do newLookup.Add(getId m, m)
-        let vms = vmObjs |> Seq.cast<ViewModel<obj, obj>> |> Seq.toList
-        for vm in vms do
+        for vm in vms |> Seq.toList do
           match newLookup.TryGetValue (getId vm.CurrentModel) with
-          | false, _ -> vmObjs.Remove(vm) |> ignore
+          | false, _ -> vms.Remove(vm) |> ignore
           | true, newSubModel -> vm.UpdateModel newSubModel
         // Add new models that don't currently exist
         let modelsToAdd =
@@ -247,7 +244,7 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
                 vms |> Seq.exists (fun vm -> getId m = getId vm.CurrentModel) |> not
           )
         for m in modelsToAdd do
-          vmObjs.Add <| ViewModel(m, (fun msg -> toMsg (getId m, msg) |> dispatch), getBindings (), config)
+          vms.Add <| ViewModel.Create(m, (fun msg -> toMsg (getId m, msg) |> dispatch), getBindings (), config)
         // Reorder according to new model list
         for newIdx, newSubModel in newSubModels |> Seq.indexed do
           let oldIdx =
@@ -255,7 +252,7 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
             |> Seq.indexed
             |> Seq.find (fun (_, vm) -> getId newSubModel = getId vm.CurrentModel)
             |> fst
-          if oldIdx <> newIdx then vmObjs.Move(oldIdx, newIdx)
+          if oldIdx <> newIdx then vms.Move(oldIdx, newIdx)
         false
 
   /// Returns the command associated with a command binding if the command's
@@ -288,59 +285,7 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
         | Error err -> setError err name
     | _ -> ()
 
-  let properties = PropertyDescriptorCollection([||])
-  
-  do
-    for b in bindings do
-
-      let name = b.Key
-
-      let getValue (x : obj) =
-        match x with
-        | :? ViewModel<'model, 'msg> as x -> x.TryGetMember name |> Option.toObj
-        | _ -> null
-
-      let setValue (x : obj) (value : obj) =
-        match x with
-        | :? ViewModel<'model, 'msg> as x -> x.TrySetMember (name, value) |> ignore
-        | _ -> ()
-
-      let isReadOnly =
-        match b.Value with
-        | OneWay          _ -> true
-
-        | TwoWay         (_, _, _)   
-        | TwoWayValidate (_, _, _, _)
-        | TwoWayIfValid  (_, _, _)    -> false
-
-        | OneWayLazy (_, _, _, _, _)
-        | OneWaySeq  (_, _, _, _, _, _, _)
-
-        | Cmd        (_, _)
-        | CmdIfValid (_, _)
-        | ParamCmd    _
-
-        | SubModel    (_, _, _, _)
-        | SubModelSeq (_, _, _, _, _) -> true
-
-      let propertyType =
-        match b.Value with
-        | OneWay     (t, _)
-        | OneWayLazy (t, _, _, _, _)
-        | OneWayLazy (t, _, _, _, _)
-        | OneWaySeq  (t, _, _, _, _, _, _)
-        | TwoWay         (t, _, _)   
-        | TwoWayValidate (t, _, _, _)
-        | TwoWayIfValid  (t, _, _) -> t
-        | Cmd        (_, _)
-        | CmdIfValid (_, _)
-        | ParamCmd    _ -> typeof<Command>
-        | SubModel    (_, _, _, _) -> typeof<ViewModel<obj, obj>>
-        | SubModelSeq (_, _, _, _, _) -> typeof<ObservableCollection<ViewModel<obj, obj>>>
-
-      properties.Add(CustomPropertyDescriptor(name, this.GetType(), propertyType, getValue, isReadOnly, setValue)) |> ignore
-
-  member __.CurrentModel : 'model = currentModel
+  member private __.CurrentModel : 'model = currentModel
 
   member __.UpdateModel (newModel: 'model) : unit =
     log "[VM] UpdateModel %s" <| newModel.GetType().FullName
@@ -359,12 +304,12 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
     for Kvp (name, binding) in bindings do
       updateValidationStatus name binding
 
-  member __.TryGetMember memberName =
+  member __.TryGetMember memberName : obj =
     log "[VM] TryGetMember %s" memberName
     match bindings.TryGetValue memberName with
     | false, _ ->
         log "[VM] TryGetMember FAILED: Property %s doesn't exist" memberName
-        None
+        null
     | true, binding ->
         match binding with
         | OneWay (_, get)
@@ -382,39 +327,38 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
             box cmd
         | SubModel (vm, _, _, _) -> !vm |> Option.toObj |> box
         | SubModelSeq (vms, _, _, _, _) -> box vms
-        |> Some
+    |> (fun v -> log "[VM] TryGetMember %s returning: %A" memberName v; v)
 
-  member __.TrySetMember (memberName, value) =
-    log "[VM] TrySetMember %s" memberName
-    match bindings.TryGetValue memberName with
-    | false, _ ->
-        log "[VM] TrySetMember FAILED: Property %s doesn't exist" memberName
-        false
-    | true, binding ->
-        match binding with
-        | TwoWay (_, _, set)
-        | TwoWayValidate (_, _, set, _) ->
-            dispatch <| set value currentModel
-            true
-        | TwoWayIfValid (_, _, set) ->
-            match set value currentModel with
-            | Ok msg ->
-                removeError memberName
-                dispatch msg
-            | Error err -> setError err memberName
-            true
-        | OneWay _
-        | OneWayLazy _
-        | OneWaySeq _
-        | Cmd _
-        | CmdIfValid _
-        | ParamCmd _
-        | SubModel _
-        | SubModelSeq _ ->
-            log "[VM] TrySetMember FAILED: Binding %s is read-only" memberName
-            false
-
-  override __.GetProperties () = properties
+  member __.TrySetMember (memberName, value : obj) =
+    try
+      log "[VM] TrySetMember %s: %A" memberName value
+      match bindings.TryGetValue memberName with
+      | false, _ ->
+          log "[VM] TrySetMember FAILED: Property %s doesn't exist" memberName
+      | true, binding ->
+          log "[VM] TrySetMember %s: %A: %A" memberName value binding
+          match binding with
+          | TwoWay (_, _, set)
+          | TwoWayValidate (_, _, set, _) ->
+              dispatch <| set value currentModel
+          | TwoWayIfValid (_, _, set) ->
+              match set value currentModel with
+              | Ok msg ->
+                  removeError memberName
+                  dispatch msg
+              | Error err -> setError err memberName
+          | OneWay _
+          | OneWayLazy _
+          | OneWaySeq _
+          | Cmd _
+          | CmdIfValid _
+          | ParamCmd _
+          | SubModel _
+          | SubModelSeq _ ->
+              log "[VM] TrySetMember FAILED: Binding %s is read-only" memberName
+    with
+    | ex ->
+      log "[VM]: TrySetMember FAILED: %A" ex
 
   interface INotifyPropertyChanged with
     [<CLIEvent>]
@@ -430,3 +374,124 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
       match errors.TryGetValue propName with
       | true, err -> upcast [err]
       | false, _ -> upcast []
+
+and ViewModel private () =
+  static let mutable count = -1
+
+  static member private GetProperties (bindings : BindingSpec<'model, 'msg> list) =
+    seq {
+      for b in bindings do
+
+        let name = b.Name
+
+        let propertyType =
+          match b.Data with
+          | OneWaySpec         (t, _)
+          | OneWayLazySpec     (t, _, _, _)
+          | OneWaySeqLazySpec  (t, _, _, _, _, _)
+          | TwoWaySpec         (t, _, _)   
+          | TwoWayValidateSpec (t, _, _, _)
+          | TwoWayIfValidSpec  (t, _, _) -> t
+          | CmdSpec        (_, _)
+          | CmdIfValidSpec (_)
+          | ParamCmdSpec    _ -> typeof<Command>
+          | SubModelSpec    (_, _, _) -> typeof<ViewModel<obj, obj>>
+          | SubModelSeqSpec (_, _, _, _) -> typeof<ObservableCollection<ViewModel<obj, obj>>>
+
+        yield name, propertyType
+      }
+
+  static member Create<'model, 'msg>
+       (initialModel: 'model,
+        dispatch: 'msg -> unit,
+        bindingSpecs: BindingSpec<'model, 'msg> list,
+        config: ElmConfig) : ViewModel<'model, 'msg> =
+      count <- count + 1
+      let properties : seq<string * Type> = ViewModel.GetProperties bindingSpecs
+
+      let baseType = typeof<ViewModel<'model, 'msg>>
+      let baseTypeCtor = baseType.GetConstructors() |> Seq.exactlyOne
+
+      let tryGetMember = baseType.GetMethod("TryGetMember")
+      let trySetMember = baseType.GetMethod("TrySetMember")
+
+      let assemblyName    = AssemblyName(sprintf "InMemoryAssembly_%d" count)
+      let assemblyBuilder = AppDomain.CurrentDomain.DefineDynamicAssembly(assemblyName, AssemblyBuilderAccess.RunAndSave)
+
+      let moduleBuilder = assemblyBuilder.DefineDynamicModule(assemblyName.Name, emitSymbolInfo = true, fileName = sprintf "%s.dll" assemblyName.Name)
+      let typeBuilder   = moduleBuilder.DefineType(sprintf "Type_%d" count, TypeAttributes.Public, baseType)
+
+      let ctor =
+        typeBuilder.DefineConstructor(
+          MethodAttributes.Public,
+          CallingConventions.Standard,
+          baseTypeCtor.GetParameters() |> Array.map (fun p -> p.ParameterType))
+
+      let ctorIL = ctor.GetILGenerator()
+      ctorIL.Emit(OpCodes.Ldarg_0) // Instance being initialized
+      ctorIL.Emit(OpCodes.Ldarg_1) // initialModel
+      ctorIL.Emit(OpCodes.Ldarg_2) // dispatch
+      ctorIL.Emit(OpCodes.Ldarg_3) // bindingSpecs
+      ctorIL.Emit(OpCodes.Ldarg_S, 4uy) // config
+      ctorIL.Emit(OpCodes.Call, baseTypeCtor)
+      ctorIL.Emit(OpCodes.Ret)
+
+      let writeLineInGetter = typeof<Console>.GetMethod("WriteLine", [| typeof<string> |])
+      let writeLineInSetter = typeof<Console>.GetMethod("WriteLine", [| typeof<string>; typeof<obj> |])
+
+      for (propertyName, propertyType) in properties do
+          let propertyBuilder = typeBuilder.DefineProperty(propertyName, PropertyAttributes.HasDefault, propertyType, Type.EmptyTypes)
+
+          let getSetAttr = MethodAttributes.Public ||| MethodAttributes.SpecialName ||| MethodAttributes.HideBySig
+
+          ///////////////////////////////
+          // getter
+          let getMethod = typeBuilder.DefineMethod("get_" + propertyName, getSetAttr, propertyType, Type.EmptyTypes)
+          let getPropertyIL = getMethod.GetILGenerator()
+
+          ////
+          // Write the getter's name to the console
+          getPropertyIL.Emit(OpCodes.Ldstr, getMethod.Name)
+          getPropertyIL.Emit(OpCodes.Call, writeLineInGetter)
+          ////
+
+          getPropertyIL.Emit(OpCodes.Ldarg_0) // instance
+          getPropertyIL.Emit(OpCodes.Ldstr, propertyName)
+          getPropertyIL.Emit(OpCodes.Call, tryGetMember)
+          getPropertyIL.Emit(OpCodes.Unbox_Any, propertyType)
+          getPropertyIL.Emit(OpCodes.Ret)
+          propertyBuilder.SetGetMethod(getMethod)
+
+          ///////////////////////////////
+          // setter
+          let setMethod = typeBuilder.DefineMethod("set_" + propertyName, getSetAttr, typeof<Void>, [| propertyType |])
+          let setPropertyIL = setMethod.GetILGenerator()
+
+          ////
+          // Write the setter's name and argument to the console
+          setPropertyIL.Emit(OpCodes.Ldstr, sprintf "%s <{0}>" setMethod.Name)
+          setPropertyIL.Emit(OpCodes.Ldarg_1) // value
+          if propertyType.IsValueType then setPropertyIL.Emit(OpCodes.Box, propertyType)
+          setPropertyIL.Emit(OpCodes.Call, writeLineInSetter)
+          ////
+
+          ////
+          // Invoke TrySetMember
+          setPropertyIL.Emit(OpCodes.Ldarg_0) // instance
+          setPropertyIL.Emit(OpCodes.Ldstr, propertyName)
+          setPropertyIL.Emit(OpCodes.Ldarg_1) // value
+          if propertyType.IsValueType then setPropertyIL.Emit(OpCodes.Box, propertyType)
+          setPropertyIL.Emit(OpCodes.Call, trySetMember)
+          ////
+
+          setPropertyIL.Emit(OpCodes.Ret)
+          propertyBuilder.SetSetMethod(setMethod)
+
+      let t = typeBuilder.CreateType()
+      assemblyBuilder.Save(sprintf "%s.dll" assemblyName.Name)
+      //////////////////
+      let ctor = t.GetConstructors() |> Seq.exactlyOne
+      let instance = ctor.Invoke([| initialModel; dispatch; bindingSpecs; config |])
+
+      instance :?> ViewModel<'model, 'msg>
+

@@ -18,7 +18,7 @@ let internal startLoop
     match lastModel with
     | None ->
         let mapping = Program.view program model dispatch
-        let vm = ViewModel<'model,'msg>(model, dispatch, mapping, config)
+        let vm = ViewModel.Create(model, dispatch, mapping, config)
         element.DataContext <- box vm
         lastModel <- Some vm
     | Some vm ->
@@ -35,4 +35,4 @@ let internal startLoop
 
 /// Creates a design-time view model using the given model and bindings.
 let designInstance (model: 'model) (bindings: BindingSpec<'model, 'msg> list) =
-  ViewModel(model, ignore, bindings, ElmConfig.Default)
+  ViewModel.Create(model, ignore, bindings, ElmConfig.Default)
