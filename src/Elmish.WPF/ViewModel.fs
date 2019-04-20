@@ -304,12 +304,12 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
     for Kvp (name, binding) in bindings do
       updateValidationStatus name binding
 
-  member __.TryGetMember memberName : obj =
+  member __.TryGetMember memberName : 'property =
     log "[VM] TryGetMember %s" memberName
     match bindings.TryGetValue memberName with
     | false, _ ->
         log "[VM] TryGetMember FAILED: Property %s doesn't exist" memberName
-        null
+        Unchecked.defaultof<'property>
     | true, binding ->
         match binding with
         | OneWay (_, get)
@@ -325,11 +325,12 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
         | CmdIfValid (cmd, _)
         | ParamCmd cmd ->
             box cmd
-        | SubModel (vm, _, _, _) -> !vm |> Option.toObj |> box
+        | SubModel (vm, _, _, _) -> !vm |> Option.toObj :> obj
         | SubModelSeq (vms, _, _, _, _) -> box vms
+        :?> 'property
     |> (fun v -> log "[VM] TryGetMember %s returning: %A" memberName v; v)
 
-  member __.TrySetMember (memberName, value : obj) =
+  member __.TrySetMember (memberName, value : 'property) =
     try
       log "[VM] TrySetMember %s: %A" memberName value
       match bindings.TryGetValue memberName with
@@ -456,8 +457,7 @@ and ViewModel private () =
 
         getPropertyIL.Emit(OpCodes.Ldarg_0) // instance
         getPropertyIL.Emit(OpCodes.Ldstr, propertyName)
-        getPropertyIL.Emit(OpCodes.Call, tryGetMember)
-        getPropertyIL.Emit(OpCodes.Unbox_Any, propertyType)
+        getPropertyIL.Emit(OpCodes.Call, tryGetMember.MakeGenericMethod propertyType)
         getPropertyIL.Emit(OpCodes.Ret)
         propertyBuilder.SetGetMethod(getMethod)
 
@@ -479,8 +479,7 @@ and ViewModel private () =
         setPropertyIL.Emit(OpCodes.Ldarg_0) // instance
         setPropertyIL.Emit(OpCodes.Ldstr, propertyName)
         setPropertyIL.Emit(OpCodes.Ldarg_1) // value
-        if propertyType.IsValueType then setPropertyIL.Emit(OpCodes.Box, propertyType)
-        setPropertyIL.Emit(OpCodes.Call, trySetMember)
+        setPropertyIL.Emit(OpCodes.Call, trySetMember.MakeGenericMethod propertyType)
         ////
 
         setPropertyIL.Emit(OpCodes.Ret)
