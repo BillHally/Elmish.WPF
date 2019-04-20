@@ -1,6 +1,7 @@
 namespace Elmish.WPF.Internal
 
 open System
+open System.Collections
 open System.Collections.Generic
 open System.Collections.ObjectModel
 open System.ComponentModel
@@ -8,6 +9,48 @@ open System.Windows
 open Elmish.WPF
 open System.Reflection
 open System.Reflection.Emit
+
+module Seq =
+  // At runtime, casts a sequence to type T (statically typed simply to IEnumerable)
+  let castRuntime t xs : IEnumerable =
+    let f = typeof<Linq.Enumerable>.GetMethod("Cast").MakeGenericMethod [| t |]
+    f.Invoke (null, [| xs |]) :?> IEnumerable
+
+module Object =
+  type private T =
+    static member Cast<'a> (x : obj) : 'a = x :?> 'a
+
+  /// Cast to a runtime type 't'. 't' *must* be a a derived type of 'd
+  let castRuntime (t : Type) (x : 'a) : 'd =
+    let f = typeof<T>.GetMethod("Cast").MakeGenericMethod [| t |]
+    f.Invoke (null, [| x |]) :?> 'd
+
+[<AutoOpen>]
+module Extensions =
+  type IEnumerable<'a> with
+    member this.Add(x) : unit =
+      let thisType = this.GetType()
+      if thisType.GetGenericTypeDefinition() = typeof<ObservableCollection<_>>.GetGenericTypeDefinition() then
+        let add = thisType.GetMethod("Add")
+        add.Invoke(this, [| x |]) |> ignore
+      else
+        failwithf "Expected an instance of ObservableCollection, but got %A" thisType
+
+    member this.Remove(x) : unit =
+      let thisType = this.GetType()
+      if thisType.GetGenericTypeDefinition() = typeof<ObservableCollection<_>>.GetGenericTypeDefinition() then
+        let remove = thisType.GetMethod("Remove")
+        remove.Invoke(this, [| x |]) |> ignore
+      else
+        failwithf "Expected an instance of ObservableCollection, but got %A" thisType
+
+    member this.Move(oldIndex, newIndex) : unit =
+      let thisType = this.GetType()
+      if thisType.GetGenericTypeDefinition() = typeof<ObservableCollection<_>>.GetGenericTypeDefinition() then
+        let move = thisType.GetMethod("Move")
+        move.Invoke(this, [| oldIndex; newIndex |]) |> ignore
+      else
+        failwithf "Expected an instance of ObservableCollection, but got %A" thisType
 
 type CustomPropertyDescriptor(name : string, componentType : Type, propertyType : Type, getValue, isReadOnly, setValue) =
   inherit PropertyDescriptor(name, [||])
@@ -63,7 +106,7 @@ type Binding<'model, 'msg> =
       * getBindings: (unit -> BindingSpec<obj, obj> list)
       * toMsg: (obj -> 'msg)
   | SubModelSeq of
-      vms: ObservableCollection<obj> //<ViewModel<obj, obj>>
+      vms: IEnumerable<ViewModel<obj, obj>> // Really an ObservableCollection<DerivedViewModel> where DerivedViewModel :> ViewModel<obj, obj>
       * getModels: ('model -> obj seq)
       * getId: (obj -> obj)
       * getBindings: (unit -> BindingSpec<obj, obj> list)
@@ -137,14 +180,20 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
         match getModel initialModel with
         | None -> SubModel (ref None, getModel, getBindings, toMsg)
         | Some m ->
-            let vm = ViewModel.Create(getBindings (), config) (m, toMsg >> dispatch)
+            let vm = (snd (ViewModel.Create(getBindings (), config))) (m, toMsg >> dispatch)
             SubModel (ref <| Some vm, getModel, getBindings, toMsg)
     | SubModelSeqSpec (getModels, getId, getBindings, toMsg) ->
         let vms =
-          let create = ViewModel.Create(getBindings (), config)
+          let t, create = ViewModel.Create(getBindings (), config)
+          let ocType = typedefof<ObservableCollection<_>>.MakeGenericType t
+          let ocTypeCtor = ocType.GetConstructor([|typedefof<seq<_>>.MakeGenericType t |])
           getModels initialModel
-          |> Seq.map (fun m -> create (m, (fun msg -> toMsg (getId m, msg) |> dispatch)) :> obj)
-          |> ObservableCollection
+          |> Seq.map (fun m -> create (m, (fun msg -> toMsg (getId m, msg) |> dispatch)))
+          |> (
+                fun xs ->
+                  ocTypeCtor.Invoke [| Seq.castRuntime t xs |]
+                  :?> IEnumerable<ViewModel<obj, obj>>
+              )
         SubModelSeq (vms, getModels, getId, getBindings, toMsg)
 
   let setInitialError name = function
@@ -222,12 +271,13 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
             vm := None
             true
         | None, Some m ->
-            vm := Some <| ViewModel.Create(getBindings (), config) (m, toMsg >> dispatch)
+            vm := Some <| (snd (ViewModel.Create(getBindings (), config))) (m, toMsg >> dispatch)
             true
         | Some vm, Some m ->
             vm.UpdateModel(m)
             false
     | SubModelSeq (vms, getModels, getId, getBindings, toMsg) ->
+        //let vmType = vms.GetType().GetGenericArguments() |> Array.exactlyOne
         let newSubModels = getModels newModel
         // Prune and update existing models
         let newLookup = Dictionary<_,_>()
@@ -242,8 +292,9 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
           |> Seq.filter (fun m ->
                 vms |> Seq.cast<ViewModel<obj, obj>> |> Seq.exists (fun vm -> getId m = getId vm.CurrentModel) |> not
           )
+        let _, create = ViewModel.Create(getBindings (), config) // Wasteful - this type already exists
         for m in modelsToAdd do
-          vms.Add <| ViewModel.Create(getBindings (), config) (m, (fun msg -> toMsg (getId m, msg) |> dispatch))
+          vms.Add <| create (m, (fun msg -> toMsg (getId m, msg) |> dispatch))
         // Reorder according to new model list
         for newIdx, newSubModel in newSubModels |> Seq.indexed do
           let oldIdx =
@@ -305,30 +356,35 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
       updateValidationStatus name binding
 
   member __.TryGetMember memberName : 'property =
-    log "[VM] TryGetMember %s" memberName
-    match bindings.TryGetValue memberName with
-    | false, _ ->
-        log "[VM] TryGetMember FAILED: Property %s doesn't exist" memberName
-        Unchecked.defaultof<'property>
-    | true, binding ->
-        match binding with
-        | OneWay (_, get)
-        | TwoWay (_, get, _)
-        | TwoWayValidate (_, get, _, _)
-        | TwoWayIfValid (_, get, _) ->
-            get currentModel
-        | OneWayLazy (_, value, _, _, _) ->
-            (!value).Value
-        | OneWaySeq (_, vals, _, _, _, _, _) ->
-            box vals
-        | Cmd (cmd, _)
-        | CmdIfValid (cmd, _)
-        | ParamCmd cmd ->
-            box cmd
-        | SubModel (vm, _, _, _) -> !vm |> Option.toObj :> obj
-        | SubModelSeq (vms, _, _, _, _) -> box vms
-        :?> 'property
-    |> (fun v -> log "[VM] TryGetMember %s returning: %A" memberName v; v)
+    try
+      log "[VM] TryGetMember %s" memberName
+      match bindings.TryGetValue memberName with
+      | false, _ ->
+          log "[VM] TryGetMember FAILED: Property %s doesn't exist" memberName
+          Unchecked.defaultof<'property>
+      | true, binding ->
+          match binding with
+          | OneWay (_, get)
+          | TwoWay (_, get, _)
+          | TwoWayValidate (_, get, _, _)
+          | TwoWayIfValid (_, get, _) ->
+              get currentModel
+          | OneWayLazy (_, value, _, _, _) ->
+              (!value).Value
+          | OneWaySeq (_, vals, _, _, _, _, _) ->
+              box vals
+          | Cmd (cmd, _)
+          | CmdIfValid (cmd, _)
+          | ParamCmd cmd ->
+              box cmd
+          | SubModel (vm, _, _, _) -> !vm |> Option.toObj :> obj
+          | SubModelSeq (vms, _, _, _, _) -> box vms
+          :?> 'property
+      |> (fun v -> log "[VM] TryGetMember %s returning: %A" memberName v; v)
+    with
+    | ex ->
+      log "[VM]: TryGetMember %s FAILED: %A" memberName ex
+      reraise()
 
   member __.TrySetMember (memberName, value : 'property) =
     try
@@ -397,13 +453,13 @@ and ViewModel private () =
           | CmdIfValidSpec (_)
           | ParamCmdSpec    _ -> typeof<Command>
           | SubModelSpec    (_, _, _) -> typeof<ViewModel<obj, obj>>
-          | SubModelSeqSpec (_, _, _, _) -> typeof<ObservableCollection<obj>> //ViewModel<obj, obj>>>
+          | SubModelSeqSpec (_, _, _, _) -> typeof<IEnumerable<ViewModel<obj, obj>>>
 
         yield name, propertyType
       }
 
   static member Create<'model, 'msg>(bindingSpecs: BindingSpec<'model, 'msg> list, config: ElmConfig)
-      : 'model * ('msg -> unit) -> ViewModel<'model, 'msg> =
+      : Type * ('model * ('msg -> unit) -> ViewModel<'model, 'msg>) =
     count <- count + 1
     let derivedTypeName = sprintf "ViewModel_%s_%s_%d" typeof<'model>.Name typeof<'msg>.Name count
 
@@ -467,6 +523,8 @@ and ViewModel private () =
     assemblyBuilder.Save(sprintf "%s.dll" assemblyName.Name)
     let ctor = t.GetConstructors() |> Seq.exactlyOne
 
-    fun (initialModel, dispatch) ->
+    let create (initialModel, dispatch) =
       let instance = ctor.Invoke([| initialModel; dispatch; bindingSpecs; config |])
       instance :?> ViewModel<'model, 'msg>
+
+    t, create
