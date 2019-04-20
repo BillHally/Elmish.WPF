@@ -436,15 +436,11 @@ and ViewModel private () =
     ctorIL.Emit(OpCodes.Call, baseTypeCtor)
     ctorIL.Emit(OpCodes.Ret)
 
-    let writeLineInGetter = typeof<Console>.GetMethod("WriteLine", [| typeof<string> |])
-    let writeLineInSetter = typeof<Console>.GetMethod("WriteLine", [| typeof<string>; typeof<obj> |])
-
     for (propertyName, propertyType) in properties do
         let propertyBuilder = typeBuilder.DefineProperty(propertyName, PropertyAttributes.HasDefault, propertyType, Type.EmptyTypes)
 
         let getSetAttr = MethodAttributes.Public ||| MethodAttributes.SpecialName ||| MethodAttributes.HideBySig
 
-        ///////////////////////////////
         // getter
         let getMethod = typeBuilder.DefineMethod("get_" + propertyName, getSetAttr, propertyType, Type.EmptyTypes)
         let getPropertyIL = getMethod.GetILGenerator()
@@ -455,7 +451,6 @@ and ViewModel private () =
         getPropertyIL.Emit(OpCodes.Ret)
         propertyBuilder.SetGetMethod(getMethod)
 
-        ///////////////////////////////
         // setter
         let setMethod = typeBuilder.DefineMethod("set_" + propertyName, getSetAttr, typeof<Void>, [| propertyType |])
         let setPropertyIL = setMethod.GetILGenerator()
@@ -470,7 +465,6 @@ and ViewModel private () =
 
     let t = typeBuilder.CreateType()
     assemblyBuilder.Save(sprintf "%s.dll" assemblyName.Name)
-    //////////////////
     let ctor = t.GetConstructors() |> Seq.exactlyOne
 
     fun (initialModel, dispatch) ->
