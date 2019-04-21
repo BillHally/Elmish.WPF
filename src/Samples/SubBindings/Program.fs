@@ -164,9 +164,6 @@ module Bindings =
 
   let rec counterBindings =
     lazy
-      printfn "================================================================================================"
-      printfn "Generating counterBindings"
-      printfn "================================================================================================"
       [
         "CounterIdText" |> Binding.oneWay (fun (m, { Id = CounterId cid}) -> cid)
         "CounterId" |> Binding.oneWay (fun (m, c) -> c.Id)
