@@ -88,13 +88,13 @@ type Binding<'model, 'msg> =
   | SubModel of
       model: ViewModel<obj, obj> option ref
       * getModel: ('model -> obj option)
-      * getBindings: (unit -> BindingSpec<obj, obj> list)
+      * Bindings: BindingSpec<obj, obj> list
       * toMsg: (obj -> 'msg)
   | SubModelSeq of
       vms: IEnumerable<ViewModel<obj, obj>> // Really an ObservableCollection<DerivedViewModel> where DerivedViewModel :> ViewModel<obj, obj>
       * getModels: ('model -> obj seq)
       * getId: (obj -> obj)
-      * getBindings: (unit -> BindingSpec<obj, obj> list)
+      * Bindings: BindingSpec<obj, obj> list
       * toMsg: (obj * obj -> 'msg)
 
 and [<AllowNullLiteral>] ViewModel<'model, 'msg>
@@ -161,15 +161,15 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
         let execute param = dispatch <| exec param currentModel
         let canExecute param = canExec param currentModel
         ParamCmd <| Command(execute, canExecute, autoRequery)
-    | SubModelSpec (getModel, getBindings, toMsg) ->
+    | SubModelSpec (getModel, bindings, toMsg) ->
         match getModel initialModel with
-        | None -> SubModel (ref None, getModel, getBindings, toMsg)
+        | None -> SubModel (ref None, getModel, bindings.Value, toMsg)
         | Some m ->
-            let vm = (snd (ViewModel.Create(getBindings (), config))) (m, toMsg >> dispatch)
-            SubModel (ref <| Some vm, getModel, getBindings, toMsg)
-    | SubModelSeqSpec (getModels, getId, getBindings, toMsg) ->
+            let vm = (snd (ViewModel.Create(bindings.Value, config))) (m, toMsg >> dispatch)
+            SubModel (ref <| Some vm, getModel, bindings.Value, toMsg)
+    | SubModelSeqSpec (getModels, getId, bindings, toMsg) ->
         let vms =
-          let t, create = ViewModel.Create(getBindings (), config)
+          let t, create = ViewModel.Create(bindings.Value, config)
           let ocType = typedefof<ObservableCollection<_>>.MakeGenericType t
           let ocTypeCtor = ocType.GetConstructor([|typedefof<seq<_>>.MakeGenericType t |])
           getModels initialModel
@@ -179,7 +179,7 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
                   ocTypeCtor.Invoke [| Seq.castRuntime t xs |]
                   :?> IEnumerable<ViewModel<obj, obj>>
               )
-        SubModelSeq (vms, getModels, getId, getBindings, toMsg)
+        SubModelSeq (vms, getModels, getId, bindings.Value, toMsg)
 
   let setInitialError name = function
     | TwoWayValidate (_, _, _, validate) ->
@@ -249,19 +249,19 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
     | CmdIfValid _
     | ParamCmd _ ->
         false
-    | SubModel ((vm: ViewModel<obj, obj> option ref), (getModel: 'model -> obj option), getBindings, toMsg) ->
+    | SubModel ((vm: ViewModel<obj, obj> option ref), (getModel: 'model -> obj option), bindings, toMsg) ->
         match !vm, getModel newModel with
         | None, None -> false
         | Some _, None ->
             vm := None
             true
         | None, Some m ->
-            vm := Some <| (snd (ViewModel.Create(getBindings (), config))) (m, toMsg >> dispatch)
+            vm := Some <| (snd (ViewModel.Create(bindings, config))) (m, toMsg >> dispatch)
             true
         | Some vm, Some m ->
             vm.UpdateModel(m)
             false
-    | SubModelSeq (vms, getModels, getId, getBindings, toMsg) ->
+    | SubModelSeq (vms, getModels, getId, bindings, toMsg) ->
         //let vmType = vms.GetType().GetGenericArguments() |> Array.exactlyOne
         let newSubModels = getModels newModel
         // Prune and update existing models
@@ -277,7 +277,7 @@ and [<AllowNullLiteral>] ViewModel<'model, 'msg>
           |> Seq.filter (fun m ->
                 vms |> Seq.cast<ViewModel<obj, obj>> |> Seq.exists (fun vm -> getId m = getId vm.CurrentModel) |> not
           )
-        let _, create = ViewModel.Create(getBindings (), config) // Wasteful - this type already exists
+        let _, create = ViewModel.Create(bindings, config) // Wasteful - this type already exists
         for m in modelsToAdd do
           vms.Add <| create (m, (fun msg -> toMsg (getId m, msg) |> dispatch))
         // Reorder according to new model list
@@ -443,73 +443,83 @@ and ViewModel private () =
         yield name, propertyType
       }
 
+  static member val private Types = Dictionary<obj, Type * obj>()
+
   static member Create<'model, 'msg>(bindingSpecs: BindingSpec<'model, 'msg> list, config: ElmConfig)
       : Type * ('model * ('msg -> unit) -> ViewModel<'model, 'msg>) =
-    count <- count + 1
-    let derivedTypeName = sprintf "ViewModel_%s_%s_%d" typeof<'model>.Name typeof<'msg>.Name count
 
-    let properties : seq<string * Type> = ViewModel.GetProperties bindingSpecs
+    match ViewModel.Types.TryGetValue bindingSpecs with
+    | true, (t, create) -> t, (create :?> ('model * ('msg -> unit) -> ViewModel<'model, 'msg>))
+    | false, _ ->
+      count <- count + 1
+      let derivedTypeName = sprintf "ViewModel_%s_%s_%d" typeof<'model>.Name typeof<'msg>.Name count
 
-    let baseType = typeof<ViewModel<'model, 'msg>>
-    let baseTypeCtor = baseType.GetConstructors() |> Seq.exactlyOne
+      let properties : seq<string * Type> = ViewModel.GetProperties bindingSpecs
 
-    let tryGetMember = baseType.GetMethod("TryGetMember")
-    let trySetMember = baseType.GetMethod("TrySetMember")
+      let baseType = typeof<ViewModel<'model, 'msg>>
+      let baseTypeCtor = baseType.GetConstructors() |> Seq.exactlyOne
 
-    let assemblyName    = AssemblyName(sprintf "%s_Assembly" derivedTypeName)
-    let assemblyBuilder = AppDomain.CurrentDomain.DefineDynamicAssembly(assemblyName, AssemblyBuilderAccess.RunAndSave)
+      let tryGetMember = baseType.GetMethod("TryGetMember")
+      let trySetMember = baseType.GetMethod("TrySetMember")
 
-    let moduleBuilder = assemblyBuilder.DefineDynamicModule(assemblyName.Name, emitSymbolInfo = true, fileName = sprintf "%s.dll" assemblyName.Name)
-    let typeBuilder   = moduleBuilder.DefineType(derivedTypeName, TypeAttributes.Public, baseType)
+      let assemblyName    = AssemblyName(sprintf "%s_Assembly" derivedTypeName)
+      let assemblyBuilder = AppDomain.CurrentDomain.DefineDynamicAssembly(assemblyName, AssemblyBuilderAccess.RunAndSave)
 
-    let ctor =
-      typeBuilder.DefineConstructor(
-        MethodAttributes.Public,
-        CallingConventions.Standard,
-        baseTypeCtor.GetParameters() |> Array.map (fun p -> p.ParameterType))
+      let moduleBuilder = assemblyBuilder.DefineDynamicModule(assemblyName.Name, emitSymbolInfo = true, fileName = sprintf "%s.dll" assemblyName.Name)
+      let typeBuilder   = moduleBuilder.DefineType(derivedTypeName, TypeAttributes.Public, baseType)
 
-    let ctorIL = ctor.GetILGenerator()
-    ctorIL.Emit(OpCodes.Ldarg_0) // Instance being initialized
-    ctorIL.Emit(OpCodes.Ldarg_1) // initialModel
-    ctorIL.Emit(OpCodes.Ldarg_2) // dispatch
-    ctorIL.Emit(OpCodes.Ldarg_3) // bindingSpecs
-    ctorIL.Emit(OpCodes.Ldarg_S, 4uy) // config
-    ctorIL.Emit(OpCodes.Call, baseTypeCtor)
-    ctorIL.Emit(OpCodes.Ret)
+      let ctor =
+        typeBuilder.DefineConstructor(
+          MethodAttributes.Public,
+          CallingConventions.Standard,
+          baseTypeCtor.GetParameters() |> Array.map (fun p -> p.ParameterType))
 
-    for (propertyName, propertyType) in properties do
-        let propertyBuilder = typeBuilder.DefineProperty(propertyName, PropertyAttributes.HasDefault, propertyType, Type.EmptyTypes)
+      let ctorIL = ctor.GetILGenerator()
+      ctorIL.Emit(OpCodes.Ldarg_0) // Instance being initialized
+      ctorIL.Emit(OpCodes.Ldarg_1) // initialModel
+      ctorIL.Emit(OpCodes.Ldarg_2) // dispatch
+      ctorIL.Emit(OpCodes.Ldarg_3) // bindingSpecs
+      ctorIL.Emit(OpCodes.Ldarg_S, 4uy) // config
+      ctorIL.Emit(OpCodes.Call, baseTypeCtor)
+      ctorIL.Emit(OpCodes.Ret)
 
-        let getSetAttr = MethodAttributes.Public ||| MethodAttributes.SpecialName ||| MethodAttributes.HideBySig
+      for (propertyName, propertyType) in properties do
+          let propertyBuilder = typeBuilder.DefineProperty(propertyName, PropertyAttributes.HasDefault, propertyType, Type.EmptyTypes)
 
-        // getter
-        let getMethod = typeBuilder.DefineMethod("get_" + propertyName, getSetAttr, propertyType, Type.EmptyTypes)
-        let getPropertyIL = getMethod.GetILGenerator()
+          let getSetAttr = MethodAttributes.Public ||| MethodAttributes.SpecialName ||| MethodAttributes.HideBySig
 
-        getPropertyIL.Emit(OpCodes.Ldarg_0) // instance
-        getPropertyIL.Emit(OpCodes.Ldstr, propertyName)
-        getPropertyIL.Emit(OpCodes.Call, tryGetMember.MakeGenericMethod propertyType)
-        getPropertyIL.Emit(OpCodes.Ret)
-        propertyBuilder.SetGetMethod(getMethod)
+          // getter
+          let getMethod = typeBuilder.DefineMethod("get_" + propertyName, getSetAttr, propertyType, Type.EmptyTypes)
+          let getPropertyIL = getMethod.GetILGenerator()
 
-        // setter
-        let setMethod = typeBuilder.DefineMethod("set_" + propertyName, getSetAttr, typeof<Void>, [| propertyType |])
-        let setPropertyIL = setMethod.GetILGenerator()
+          getPropertyIL.Emit(OpCodes.Ldarg_0) // instance
+          getPropertyIL.Emit(OpCodes.Ldstr, propertyName)
+          getPropertyIL.Emit(OpCodes.Call, tryGetMember.MakeGenericMethod propertyType)
+          getPropertyIL.Emit(OpCodes.Ret)
+          propertyBuilder.SetGetMethod(getMethod)
 
-        setPropertyIL.Emit(OpCodes.Ldarg_0) // instance
-        setPropertyIL.Emit(OpCodes.Ldstr, propertyName)
-        setPropertyIL.Emit(OpCodes.Ldarg_1) // value
-        setPropertyIL.Emit(OpCodes.Call, trySetMember.MakeGenericMethod propertyType)
+          // setter
+          let setMethod = typeBuilder.DefineMethod("set_" + propertyName, getSetAttr, typeof<Void>, [| propertyType |])
+          let setPropertyIL = setMethod.GetILGenerator()
 
-        setPropertyIL.Emit(OpCodes.Ret)
-        propertyBuilder.SetSetMethod(setMethod)
+          setPropertyIL.Emit(OpCodes.Ldarg_0) // instance
+          setPropertyIL.Emit(OpCodes.Ldstr, propertyName)
+          setPropertyIL.Emit(OpCodes.Ldarg_1) // value
+          setPropertyIL.Emit(OpCodes.Call, trySetMember.MakeGenericMethod propertyType)
 
-    let t = typeBuilder.CreateType()
-    assemblyBuilder.Save(sprintf "%s.dll" assemblyName.Name)
-    let ctor = t.GetConstructors() |> Seq.exactlyOne
+          setPropertyIL.Emit(OpCodes.Ret)
+          propertyBuilder.SetSetMethod(setMethod)
 
-    let create (initialModel, dispatch) =
-      let instance = ctor.Invoke([| initialModel; dispatch; bindingSpecs; config |])
-      instance :?> ViewModel<'model, 'msg>
+      let t = typeBuilder.CreateType()
+      assemblyBuilder.Save(sprintf "%s.dll" assemblyName.Name)
+      let ctor = t.GetConstructors() |> Seq.exactlyOne
 
-    t, create
+      let create : ('model * ('msg -> unit) -> ViewModel<'model, 'msg>) =
+
+        fun (initialModel, dispatch) ->
+          let instance = ctor.Invoke([| initialModel; dispatch; bindingSpecs; config |])
+          instance :?> ViewModel<'model, 'msg>
+
+      ViewModel.Types.Add(bindingSpecs, (t, box create))
+
+      t, create

@@ -272,13 +272,14 @@ module Binding =
       (bindings: unit -> BindingSpec<'subModel, 'subMsg> list)
       (toMsg: 'subMsg -> 'msg)
       (name: string) =
-    let getBoxedBindings () =
-      bindings ()
-      |> List.map (fun spec ->
-           { Name = spec.Name; Data = BindingSpecData.box spec.Data }
-      )
+    let boxedBindings =
+      lazy
+        bindings ()
+        |> List.map (fun spec ->
+             { Name = spec.Name; Data = BindingSpecData.box spec.Data }
+        )
     { Name = name
-      Data = SubModelSpec (getModel >> box >> Some, getBoxedBindings, unbox >> toMsg) }
+      Data = SubModelSpec (getModel >> box >> Some, boxedBindings, unbox >> toMsg) }
 
   /// <summary>
   ///   Creates a binding to a sub-model/component that has its own bindings and
@@ -299,13 +300,14 @@ module Binding =
       (bindings: unit -> BindingSpec<'subModel, 'subMsg> list)
       (toMsg: 'subMsg -> 'msg)
       (name: string) =
-    let getBoxedBindings () =
-      bindings ()
-      |> List.map (fun spec ->
-           { Name = spec.Name; Data = BindingSpecData.box spec.Data }
-      )
+    let boxedBindings =
+      lazy
+        bindings ()
+        |> List.map (fun spec ->
+             { Name = spec.Name; Data = BindingSpecData.box spec.Data }
+        )
     { Name = name
-      Data = SubModelSpec (getModel >> Option.map box, getBoxedBindings, unbox >> toMsg) }
+      Data = SubModelSpec (getModel >> Option.map box, boxedBindings, unbox >> toMsg) }
 
   /// <summary>
   ///   Creates a binding to a sequence of sub-models/components, each uniquely
@@ -329,18 +331,19 @@ module Binding =
       (bindings: unit -> BindingSpec<'subModel, 'subMsg> list)
       (toMsg: ('id * 'subMsg) -> 'msg)
       (name: string) =
-    let getBoxedBindings () =
-      bindings ()
-      |> List.map (fun spec ->
-           { Name = spec.Name; Data = BindingSpecData.box spec.Data }
-      )
+    let boxedBindings =
+      lazy
+        bindings ()
+        |> List.map (fun spec ->
+             { Name = spec.Name; Data = BindingSpecData.box spec.Data }
+        )
     let boxedToMsg (id: obj, msg: obj) = toMsg (unbox id, unbox msg)
     { Name = name
       Data =
         SubModelSeqSpec
           ( getModels >> Seq.map box,
             unbox >> getId >> box,
-            getBoxedBindings,
+            boxedBindings,
             boxedToMsg )
     }
 
@@ -377,16 +380,17 @@ module Binding =
       =
     let getMainAndSubs currentModel =
       currentModel |> getSubItems |> Seq.map (fun subModel -> getMainModel currentModel, subModel)
-    let getBoxedBindings () =
-      bindings ()
-      |> List.map (fun spec ->
-            { Name = spec.Name; Data = BindingSpecData.box spec.Data }
-      )
+    let boxedBindings =
+      lazy
+        bindings ()
+        |> List.map (fun spec ->
+              { Name = spec.Name; Data = BindingSpecData.box spec.Data }
+        )
     { Name = name
       Data =
         SubModelSeqSpec
           ( getMainAndSubs >> Seq.map box,
             unbox<'mainModel * 'subModel> >> snd >> getId >> box,
-            getBoxedBindings,
+            boxedBindings,
             snd >> unbox )
     }

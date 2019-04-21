@@ -42,12 +42,12 @@ type BindingSpecData<'model, 'msg> =
       * autoRequery: bool
   | SubModelSpec of
       getModel: ('model -> obj option)
-      * getBindings: (unit -> BindingSpec<obj, obj> list)
+      * Bindings: BindingSpec<obj, obj> list Lazy
       * toMsg: (obj -> 'msg)
   | SubModelSeqSpec of
       getModels: ('model -> obj seq)
       * getId: (obj -> obj)
-      * getBindings: (unit -> BindingSpec<obj, obj> list)
+      * Bindings: BindingSpec<obj, obj> list Lazy
       * toMsg: (obj * obj -> 'msg)
 
 /// Represents all necessary data used to create a binding.
