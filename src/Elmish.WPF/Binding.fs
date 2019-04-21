@@ -1,5 +1,7 @@
 ﻿namespace Elmish.WPF
 
+open System.Collections.ObjectModel
+
 open Elmish.WPF.Internal
 
 module Binding =
@@ -74,7 +76,7 @@ module Binding =
     { Name = name
       Data =
         OneWaySeqLazySpec (
-          typeof<'a>,
+          typeof<ObservableCollection<obj>>,
           id >> box,
           unbox >> get >> Seq.map box,
           (fun _ _ -> false),
