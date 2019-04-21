@@ -472,7 +472,7 @@ and ViewModel private () =
       let tryGetMember = baseType.GetMethod("TryGetMember")
       let trySetMember = baseType.GetMethod("TrySetMember")
 
-      let assemblyName    = AssemblyName(sprintf "%s_Assembly" derivedTypeName)
+      let assemblyName    = AssemblyName derivedTypeName
       let assemblyBuilder = AppDomain.CurrentDomain.DefineDynamicAssembly(assemblyName, AssemblyBuilderAccess.RunAndSave)
 
       let moduleBuilder = assemblyBuilder.DefineDynamicModule(assemblyName.Name, emitSymbolInfo = true, fileName = sprintf "%s.dll" assemblyName.Name)
