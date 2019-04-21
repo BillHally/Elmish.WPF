@@ -52,21 +52,6 @@ module Extensions =
       else
         failwithf "Expected an instance of ObservableCollection, but got %A" thisType
 
-type CustomPropertyDescriptor(name : string, componentType : Type, propertyType : Type, getValue, isReadOnly, setValue) =
-  inherit PropertyDescriptor(name, [||])
-
-  override __.ComponentType = componentType
-  override __.PropertyType  = propertyType
-  override __.IsReadOnly    = isReadOnly
-
-  override __.CanResetValue(x) = false
-  override __.ResetValue(x : obj) = failwithf "ResetValue shouldn't get invoked (parameter: %A)" x
-
-  override __.GetValue(x : obj) = getValue x
-  override __.SetValue(x, v) = setValue x v
-
-  override __.ShouldSerializeValue(x) = true
-
 /// Represents all necessary data used in an active binding.
 type Binding<'model, 'msg> =
   | OneWay of propertyType: Type * get: ('model -> obj)
