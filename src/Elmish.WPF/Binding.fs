@@ -269,12 +269,12 @@ module Binding =
   /// <param name="name">The binding name.</param>
   let subModel
       (getModel: 'model -> 'subModel)
-      (bindings: unit -> BindingSpec<'subModel, 'subMsg> list)
+      (bindings: BindingSpec<'subModel, 'subMsg> list Lazy)
       (toMsg: 'subMsg -> 'msg)
       (name: string) =
     let boxedBindings =
       lazy
-        bindings ()
+        bindings.Value
         |> List.map (fun spec ->
              { Name = spec.Name; Data = BindingSpecData.box spec.Data }
         )
@@ -297,12 +297,12 @@ module Binding =
   /// <param name="name">The binding name.</param>
   let subModelOpt
       (getModel: 'model -> 'subModel option)
-      (bindings: unit -> BindingSpec<'subModel, 'subMsg> list)
+      (bindings: BindingSpec<'subModel, 'subMsg> list Lazy)
       (toMsg: 'subMsg -> 'msg)
       (name: string) =
     let boxedBindings =
       lazy
-        bindings ()
+        bindings.Value
         |> List.map (fun spec ->
              { Name = spec.Name; Data = BindingSpecData.box spec.Data }
         )
@@ -328,12 +328,12 @@ module Binding =
   let subModelSeq
       (getModels: 'model -> #seq<'subModel>)
       (getId: 'subModel -> 'id)
-      (bindings: unit -> BindingSpec<'subModel, 'subMsg> list)
+      (bindings: BindingSpec<'subModel, 'subMsg> list Lazy)
       (toMsg: ('id * 'subMsg) -> 'msg)
       (name: string) =
     let boxedBindings =
       lazy
-        bindings ()
+        bindings.Value
         |> List.map (fun spec ->
              { Name = spec.Name; Data = BindingSpecData.box spec.Data }
         )
@@ -374,7 +374,7 @@ module Binding =
       (getMainModel: 'currentModel -> 'mainModel)
       (getSubItems: 'currentModel -> #seq<'subModel>)
       (getId: 'subModel -> 'id)
-      (bindings: unit -> BindingSpec<'mainModel * 'subModel, 'msg> list)
+      (bindings: BindingSpec<'mainModel * 'subModel, 'msg> list Lazy)
       (name: string)
       : BindingSpec<'currentModel, 'msg>
       =
@@ -382,7 +382,7 @@ module Binding =
       currentModel |> getSubItems |> Seq.map (fun subModel -> getMainModel currentModel, subModel)
     let boxedBindings =
       lazy
-        bindings ()
+        bindings.Value
         |> List.map (fun spec ->
               { Name = spec.Name; Data = BindingSpecData.box spec.Data }
         )

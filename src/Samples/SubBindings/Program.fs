@@ -162,33 +162,37 @@ module Bindings =
 
   open App
 
-  let rec counterBindings () =
-    [
-      "CounterIdText" |> Binding.oneWay (fun (m, { Id = CounterId cid}) -> cid)
-      "CounterId" |> Binding.oneWay (fun (m, c) -> c.Id)
-      "CounterValue" |> Binding.oneWay (fun (m, c) -> c.CounterValue)
-      "Increment" |> Binding.cmd (fun (m, c) -> Increment c.Id)
-      "Decrement" |> Binding.cmd (fun (m, c) -> Decrement c.Id)
-      "StepSize" |> Binding.twoWay
-        (fun (m, c) -> float c.StepSize)
-        (fun v (m, c) -> SetStepSize (c.Id, int v))
-      "Reset" |> Binding.cmd (fun (m, c) -> Reset c.Id)
-      "Remove" |> Binding.cmd (fun (m, c) -> Remove c.Id)
-      "AddChild" |> Binding.cmd (fun (m, c) -> AddCounter (Some c.Id))
-      "MoveUp" |> Binding.cmdIf
-        (fun (m, c) -> MoveUp c.Id)
-        (fun (m, c) -> m |> getSiblings c.Id |> List.tryHead <> Some c)
-      "MoveDown" |> Binding.cmdIf
-        (fun (m, c) -> MoveDown c.Id)
-        (fun (m, c) -> m |> getSiblings c.Id |> List.tryLast <> Some c)
-      "GlobalState" |> Binding.oneWay (fun (m, c) -> m.SomeGlobalState)
-      "ChildCounters" |> Binding.subBindingSeq
-        fst
-        (fun (m, c) -> childrenOf c.Id m)
-        (fun c -> c.Id)
-        counterBindings
-    ]
-
+  let rec counterBindings =
+    lazy
+      printfn "================================================================================================"
+      printfn "Generating counterBindings"
+      printfn "================================================================================================"
+      [
+        "CounterIdText" |> Binding.oneWay (fun (m, { Id = CounterId cid}) -> cid)
+        "CounterId" |> Binding.oneWay (fun (m, c) -> c.Id)
+        "CounterValue" |> Binding.oneWay (fun (m, c) -> c.CounterValue)
+        "Increment" |> Binding.cmd (fun (m, c) -> Increment c.Id)
+        "Decrement" |> Binding.cmd (fun (m, c) -> Decrement c.Id)
+        "StepSize" |> Binding.twoWay
+          (fun (m, c) -> float c.StepSize)
+          (fun v (m, c) -> SetStepSize (c.Id, int v))
+        "Reset" |> Binding.cmd (fun (m, c) -> Reset c.Id)
+        "Remove" |> Binding.cmd (fun (m, c) -> Remove c.Id)
+        "AddChild" |> Binding.cmd (fun (m, c) -> AddCounter (Some c.Id))
+        "MoveUp" |> Binding.cmdIf
+          (fun (m, c) -> MoveUp c.Id)
+          (fun (m, c) -> m |> getSiblings c.Id |> List.tryHead <> Some c)
+        "MoveDown" |> Binding.cmdIf
+          (fun (m, c) -> MoveDown c.Id)
+          (fun (m, c) -> m |> getSiblings c.Id |> List.tryLast <> Some c)
+        "GlobalState" |> Binding.oneWay (fun (m, c) -> m.SomeGlobalState)
+        "ChildCounters" |> Binding.subBindingSeq
+          fst
+          (fun (m, c) -> childrenOf c.Id m)
+          (fun c -> c.Id)
+          counterBindings
+      ]
+  
   let rootBindings model dispatch =
     [
       "Counters" |> Binding.subBindingSeq

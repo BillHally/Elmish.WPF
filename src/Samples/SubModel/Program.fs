@@ -24,7 +24,8 @@ module Clock =
     | Tick t -> { m with Time = t }
     | ToggleUtc -> { m with UseUtc = not m.UseUtc }
 
-  let bindings () =
+  let bindings =
+    lazy
     [ 
       "Time" |> Binding.oneWay 
         (fun m -> if m.UseUtc then m.Time.UtcDateTime else m.Time.LocalDateTime)
@@ -59,7 +60,8 @@ module CounterWithClock =
     | Reset -> { m with Count = 0; StepSize = 1 }
     | ClockMsg msg -> { m with Clock = Clock.update msg m.Clock }
 
-  let bindings () =
+  let bindings =
+    lazy
     [
       "CounterValue" |> Binding.oneWay (fun m -> m.Count)
       "Increment" |> Binding.cmd (fun m -> Increment)

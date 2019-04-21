@@ -22,7 +22,8 @@ module Form1 =
     | TextInput s -> { m with Text = s }
     | Submit -> m  // handled by parent
 
-  let bindings () =
+  let bindings =
+    lazy
     [
       "Text" |> Binding.twoWay (fun m -> m.Text) (fun v m -> TextInput v)
       "Submit" |> Binding.cmd (fun m -> Submit)
@@ -50,7 +51,8 @@ module Form2 =
     | Text2Input s -> { m with Input2 = s }
     | Submit -> m  // handled by parent
 
-  let bindings () =
+  let bindings =
+    lazy
     [
       "Input1" |> Binding.twoWay (fun m -> m.Input1) (fun v m -> Text1Input v)
       "Input2" |> Binding.twoWay (fun m -> m.Input2) (fun v m -> Text2Input v)

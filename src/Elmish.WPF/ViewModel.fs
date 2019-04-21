@@ -443,17 +443,27 @@ and ViewModel private () =
         yield name, propertyType
       }
 
-  static member val private Types = Dictionary<obj, Type * obj>()
+  static member val private Types = Dictionary<string, Type * obj>()
+
+  static member private GetId (bindingSpecs : BindingSpec<'model, 'msg> list) =
+    let bindingNames =
+      bindingSpecs
+      |> Seq.map (fun x -> x.Name)
+      |> String.concat "|" // Concatenate using a character invalid in binding names to avoid ambiguity
+
+    sprintf "%s_%s_%s" typeof<'model>.Name typeof<'msg>.Name bindingNames
 
   static member Create<'model, 'msg>(bindingSpecs: BindingSpec<'model, 'msg> list, config: ElmConfig)
       : Type * ('model * ('msg -> unit) -> ViewModel<'model, 'msg>) =
 
-    match ViewModel.Types.TryGetValue bindingSpecs with
+    let bindingsId = ViewModel.GetId bindingSpecs
+
+    match ViewModel.Types.TryGetValue bindingsId with
     | true, (t, create) -> t, (create :?> ('model * ('msg -> unit) -> ViewModel<'model, 'msg>))
     | false, _ ->
       count <- count + 1
-      let derivedTypeName = sprintf "ViewModel_%s_%s_%d" typeof<'model>.Name typeof<'msg>.Name count
-
+      let derivedTypeName = sprintf "ViewModel_%d_%s" count (bindingsId.[0..min 50 (bindingsId.Length - 1)].Replace("|", "_")) // Ensure valid name (the count avoids ambiguity)
+      printfn "Creating: %s (%d already)" derivedTypeName ViewModel.Types.Count 
       let properties : seq<string * Type> = ViewModel.GetProperties bindingSpecs
 
       let baseType = typeof<ViewModel<'model, 'msg>>
@@ -520,6 +530,6 @@ and ViewModel private () =
           let instance = ctor.Invoke([| initialModel; dispatch; bindingSpecs; config |])
           instance :?> ViewModel<'model, 'msg>
 
-      ViewModel.Types.Add(bindingSpecs, (t, box create))
+      ViewModel.Types.Add(bindingsId, (t, box create))
 
       t, create

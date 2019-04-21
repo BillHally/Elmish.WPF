@@ -76,7 +76,8 @@ module RecCounter =
   and updateSpecific id msg m =
     if m.CounterId = id then update msg m else m
 
-  let rec bindings () =
+  let rec bindings =
+    lazy
     [
       "CounterId" |> Binding.oneWay (fun m -> m.CounterId)
       "CounterValue" |> Binding.oneWay (fun m -> m.CounterValue)
@@ -108,7 +109,6 @@ module RecCounter =
         bindings
         ChildMsg
     ]
-
 
 module App =
 
@@ -144,7 +144,7 @@ module App =
       "Counters" |> Binding.subModelSeq
         (fun m -> m.Counters)
         (fun cm -> cm.CounterId)
-        (fun () -> RecCounter.bindings ())
+        RecCounter.bindings
         CounterMsg
       "AddCounter" |> Binding.cmd (fun m -> AddCounter)
       /// TODO: Remove, MoveUp, and MoveDown don't work because I'm not sure how

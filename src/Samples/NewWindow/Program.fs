@@ -21,7 +21,8 @@ module Win1 =
     match msg with
     | TextInput s -> { m with Text = s }
 
-  let bindings () =
+  let bindings =
+    lazy
     [ "Text" |> Binding.twoWay (fun m -> m.Text) (fun v m -> TextInput v) ]
 
 
@@ -44,7 +45,8 @@ module Win2 =
     | Text1Input s -> { m with Input1 = s }
     | Text2Input s -> { m with Input2 = s }
 
-  let bindings () =
+  let bindings =
+    lazy
     [
       "Input1" |> Binding.twoWay (fun m -> m.Input1) (fun v m -> Text1Input v)
       "Input2" |> Binding.twoWay (fun m -> m.Input2) (fun v m -> Text2Input v)
